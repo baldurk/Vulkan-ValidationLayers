@@ -115,11 +115,8 @@ void ValidationStateTracker::PreCallRecordDestroyImage(VkDevice device, VkImage 
     const VulkanTypedHandle obj_struct(image, kVulkanObjectTypeImage);
     InvalidateCommandBuffers(image_state->cb_bindings, obj_struct);
     // Clean up memory mapping, bindings and range references for image
-    for (auto mem_binding : image_state->GetBoundMemory()) {
-        auto mem_info = GetDevMemState(mem_binding);
-        if (mem_info) {
-            RemoveImageMemoryRange(image, mem_info);
-        }
+    for (auto &mem_binding : image_state->GetBoundMemory()) {
+        RemoveImageMemoryRange(image, mem_binding);
     }
     if (image_state->bind_swapchain) {
         auto swapchain = GetSwapchainState(image_state->bind_swapchain);
@@ -250,11 +247,8 @@ void ValidationStateTracker::PreCallRecordDestroyBuffer(VkDevice device, VkBuffe
     const VulkanTypedHandle obj_struct(buffer, kVulkanObjectTypeBuffer);
 
     InvalidateCommandBuffers(buffer_state->cb_bindings, obj_struct);
-    for (auto mem_binding : buffer_state->GetBoundMemory()) {
-        auto mem_info = GetDevMemState(mem_binding);
-        if (mem_info) {
-            RemoveBufferMemoryRange(buffer, mem_info);
-        }
+    for (auto &mem_binding : buffer_state->GetBoundMemory()) {
+        RemoveBufferMemoryRange(buffer, mem_binding);
     }
     ClearMemoryObjectBindings(obj_struct);
     buffer_state->destroyed = true;
@@ -331,9 +325,8 @@ void ValidationStateTracker::AddAliasingImage(IMAGE_STATE *image_state) {
             bound_images = &swapchain_state->images[image_state->bind_swapchain_imageIndex].bound_images;
         }
     } else {
-        auto mem_state = GetDevMemState(image_state->binding.mem);
-        if (mem_state) {
-            bound_images = &mem_state->bound_images;
+        if (image_state->binding.mem_state) {
+            bound_images = &image_state->binding.mem_state->bound_images;
         }
     }
 
@@ -489,13 +482,10 @@ void ValidationStateTracker::AddCommandBufferBindingImage(CMD_BUFFER_STATE *cb_n
         if (AddCommandBufferBinding(image_state->cb_bindings,
                                     VulkanTypedHandle(image_state->image, kVulkanObjectTypeImage, image_state), cb_node)) {
             // Now update CB binding in MemObj mini CB list
-            for (auto mem_binding : image_state->GetBoundMemory()) {
-                DEVICE_MEMORY_STATE *pMemInfo = GetDevMemState(mem_binding);
-                if (pMemInfo) {
-                    // Now update CBInfo's Mem reference list
-                    AddCommandBufferBinding(pMemInfo->cb_bindings,
-                                            VulkanTypedHandle(mem_binding, kVulkanObjectTypeDeviceMemory, pMemInfo), cb_node);
-                }
+            for (auto &mem_binding : image_state->GetBoundMemory()) {
+                // Now update CBInfo's Mem reference list
+                AddCommandBufferBinding(mem_binding->cb_bindings,
+                                        VulkanTypedHandle(mem_binding->mem, kVulkanObjectTypeDeviceMemory, mem_binding), cb_node);
             }
         }
     }
@@ -527,13 +517,10 @@ void ValidationStateTracker::AddCommandBufferBindingBuffer(CMD_BUFFER_STATE *cb_
     if (AddCommandBufferBinding(buffer_state->cb_bindings,
                                 VulkanTypedHandle(buffer_state->buffer, kVulkanObjectTypeBuffer, buffer_state), cb_node)) {
         // Now update CB binding in MemObj mini CB list
-        for (auto mem_binding : buffer_state->GetBoundMemory()) {
-            DEVICE_MEMORY_STATE *pMemInfo = GetDevMemState(mem_binding);
-            if (pMemInfo) {
-                // Now update CBInfo's Mem reference list
-                AddCommandBufferBinding(pMemInfo->cb_bindings,
-                                        VulkanTypedHandle(mem_binding, kVulkanObjectTypeDeviceMemory, pMemInfo), cb_node);
-            }
+        for (auto &mem_binding : buffer_state->GetBoundMemory()) {
+            // Now update CBInfo's Mem reference list
+            AddCommandBufferBinding(mem_binding->cb_bindings,
+                                    VulkanTypedHandle(mem_binding->mem, kVulkanObjectTypeDeviceMemory, mem_binding), cb_node);
         }
     }
 }
@@ -564,13 +551,10 @@ void ValidationStateTracker::AddCommandBufferBindingAccelerationStructure(CMD_BU
             as_state->cb_bindings,
             VulkanTypedHandle(as_state->acceleration_structure, kVulkanObjectTypeAccelerationStructureNV, as_state), cb_node)) {
         // Now update CB binding in MemObj mini CB list
-        for (auto mem_binding : as_state->GetBoundMemory()) {
-            DEVICE_MEMORY_STATE *pMemInfo = GetDevMemState(mem_binding);
-            if (pMemInfo) {
-                // Now update CBInfo's Mem reference list
-                AddCommandBufferBinding(pMemInfo->cb_bindings,
-                                        VulkanTypedHandle(mem_binding, kVulkanObjectTypeDeviceMemory, pMemInfo), cb_node);
-            }
+        for (auto &mem_binding : as_state->GetBoundMemory()) {
+            // Now update CBInfo's Mem reference list
+            AddCommandBufferBinding(mem_binding->cb_bindings,
+                                    VulkanTypedHandle(mem_binding->mem, kVulkanObjectTypeDeviceMemory, mem_binding), cb_node);
         }
     }
 }
@@ -606,14 +590,13 @@ void ValidationStateTracker::SetMemBinding(VkDeviceMemory mem, BINDABLE *mem_bin
                                            const VulkanTypedHandle &typed_handle) {
     assert(mem_binding);
     mem_binding->binding.mem = mem;
-    mem_binding->UpdateBoundMemorySet();  // force recreation of cached set
     mem_binding->binding.offset = memory_offset;
     mem_binding->binding.size = mem_binding->requirements.size;
 
     if (mem != VK_NULL_HANDLE) {
-        DEVICE_MEMORY_STATE *mem_info = GetDevMemState(mem);
-        if (mem_info) {
-            mem_info->obj_bindings.insert(typed_handle);
+        mem_binding->binding.mem_state = GetShared<DEVICE_MEMORY_STATE>(mem);
+        if (mem_binding->binding.mem_state) {
+            mem_binding->binding.mem_state->obj_bindings.insert(typed_handle);
             // For image objects, make sure default memory state is correctly set
             // TODO : What's the best/correct way to handle this?
             if (kVulkanObjectTypeImage == typed_handle.type) {
@@ -625,6 +608,7 @@ void ValidationStateTracker::SetMemBinding(VkDeviceMemory mem, BINDABLE *mem_bin
                     }
                 }
             }
+            mem_binding->UpdateBoundMemorySet();  // force recreation of cached set
         }
     }
 }
@@ -635,19 +619,20 @@ void ValidationStateTracker::SetMemBinding(VkDeviceMemory mem, BINDABLE *mem_bin
 //  Add reference from objectInfo to memoryInfo
 //  Add reference off of object's binding info
 // Return VK_TRUE if addition is successful, VK_FALSE otherwise
-bool ValidationStateTracker::SetSparseMemBinding(MEM_BINDING binding, const VulkanTypedHandle &typed_handle) {
+bool ValidationStateTracker::SetSparseMemBinding(const VkDeviceMemory mem, const VkDeviceSize mem_offset,
+                                                 const VkDeviceSize mem_size, const VulkanTypedHandle &typed_handle) {
     bool skip = VK_FALSE;
     // Handle NULL case separately, just clear previous binding & decrement reference
-    if (binding.mem == VK_NULL_HANDLE) {
+    if (mem == VK_NULL_HANDLE) {
         // TODO : This should cause the range of the resource to be unbound according to spec
     } else {
         BINDABLE *mem_binding = GetObjectMemBinding(typed_handle);
         assert(mem_binding);
         if (mem_binding) {  // Invalid handles are reported by object tracker, but Get returns NULL for them, so avoid SEGV here
             assert(mem_binding->sparse);
-            DEVICE_MEMORY_STATE *mem_info = GetDevMemState(binding.mem);
-            if (mem_info) {
-                mem_info->obj_bindings.insert(typed_handle);
+            MEM_BINDING binding = {GetShared<DEVICE_MEMORY_STATE>(mem), mem_offset, mem_size};
+            if (binding.mem_state) {
+                binding.mem_state->obj_bindings.insert(typed_handle);
                 // Need to set mem binding for this object
                 mem_binding->sparse_bindings.insert(binding);
                 mem_binding->UpdateBoundMemorySet();
@@ -1741,14 +1726,14 @@ void ValidationStateTracker::PostCallRecordQueueBindSparse(VkQueue queue, uint32
         for (uint32_t j = 0; j < bindInfo.bufferBindCount; j++) {
             for (uint32_t k = 0; k < bindInfo.pBufferBinds[j].bindCount; k++) {
                 auto sparse_binding = bindInfo.pBufferBinds[j].pBinds[k];
-                SetSparseMemBinding({sparse_binding.memory, sparse_binding.memoryOffset, sparse_binding.size},
+                SetSparseMemBinding(sparse_binding.memory, sparse_binding.memoryOffset, sparse_binding.size,
                                     VulkanTypedHandle(bindInfo.pBufferBinds[j].buffer, kVulkanObjectTypeBuffer));
             }
         }
         for (uint32_t j = 0; j < bindInfo.imageOpaqueBindCount; j++) {
             for (uint32_t k = 0; k < bindInfo.pImageOpaqueBinds[j].bindCount; k++) {
                 auto sparse_binding = bindInfo.pImageOpaqueBinds[j].pBinds[k];
-                SetSparseMemBinding({sparse_binding.memory, sparse_binding.memoryOffset, sparse_binding.size},
+                SetSparseMemBinding(sparse_binding.memory, sparse_binding.memoryOffset, sparse_binding.size,
                                     VulkanTypedHandle(bindInfo.pImageOpaqueBinds[j].image, kVulkanObjectTypeImage));
             }
         }
@@ -1757,7 +1742,7 @@ void ValidationStateTracker::PostCallRecordQueueBindSparse(VkQueue queue, uint32
                 auto sparse_binding = bindInfo.pImageBinds[j].pBinds[k];
                 // TODO: This size is broken for non-opaque bindings, need to update to comprehend full sparse binding data
                 VkDeviceSize size = sparse_binding.extent.depth * sparse_binding.extent.height * sparse_binding.extent.width * 4;
-                SetSparseMemBinding({sparse_binding.memory, sparse_binding.memoryOffset, size},
+                SetSparseMemBinding(sparse_binding.memory, sparse_binding.memoryOffset, size,
                                     VulkanTypedHandle(bindInfo.pImageBinds[j].image, kVulkanObjectTypeImage));
             }
         }
@@ -1970,9 +1955,9 @@ void ValidationStateTracker::InsertMemoryRange(const VulkanTypedHandle &typed_ha
     if (typed_handle.type == kVulkanObjectTypeImage) {
         mem_info->bound_images.insert(typed_handle.Cast<VkImage>());
     } else if (typed_handle.type == kVulkanObjectTypeBuffer) {
-        mem_info->bound_buffers.insert(typed_handle.handle);
+        mem_info->bound_buffers.insert(typed_handle.Cast<VkBuffer>());
     } else if (typed_handle.type == kVulkanObjectTypeAccelerationStructureNV) {
-        mem_info->bound_acceleration_structures.insert(typed_handle.handle);
+        mem_info->bound_acceleration_structures.insert(typed_handle.Cast<VkAccelerationStructureNV>());
     } else {
         // Unsupported object type
         assert(false);
@@ -1999,9 +1984,9 @@ static void RemoveMemoryRange(const VulkanTypedHandle &typed_handle, DEVICE_MEMO
     if (typed_handle.type == kVulkanObjectTypeImage) {
         mem_info->bound_images.erase(typed_handle.Cast<VkImage>());
     } else if (typed_handle.type == kVulkanObjectTypeBuffer) {
-        mem_info->bound_buffers.erase(typed_handle.handle);
+        mem_info->bound_buffers.erase(typed_handle.Cast<VkBuffer>());
     } else if (typed_handle.type == kVulkanObjectTypeAccelerationStructureNV) {
-        mem_info->bound_acceleration_structures.erase(typed_handle.handle);
+        mem_info->bound_acceleration_structures.erase(typed_handle.Cast<VkAccelerationStructureNV>());
     } else {
         // Unsupported object type
         assert(false);
@@ -3013,11 +2998,8 @@ void ValidationStateTracker::PreCallRecordDestroyAccelerationStructureNV(VkDevic
     if (as_state) {
         const VulkanTypedHandle obj_struct(accelerationStructure, kVulkanObjectTypeAccelerationStructureNV);
         InvalidateCommandBuffers(as_state->cb_bindings, obj_struct);
-        for (auto mem_binding : as_state->GetBoundMemory()) {
-            auto mem_info = GetDevMemState(mem_binding);
-            if (mem_info) {
-                RemoveAccelerationStructureMemoryRange(accelerationStructure, mem_info);
-            }
+        for (auto &mem_binding : as_state->GetBoundMemory()) {
+            RemoveAccelerationStructureMemoryRange(accelerationStructure, mem_binding);
         }
         ClearMemoryObjectBindings(obj_struct);
         as_state->destroyed = true;

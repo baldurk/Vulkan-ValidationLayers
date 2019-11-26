@@ -192,9 +192,12 @@ struct DESCRIPTOR_POOL_STATE : BASE_NODE {
     }
 };
 
+struct DEVICE_MEMORY_STATE;
+
 // Generic memory binding struct to track objects bound to objects
 struct MEM_BINDING {
     VkDeviceMemory mem;
+    std::shared_ptr<DEVICE_MEMORY_STATE> mem_state;
     VkDeviceSize offset;
     VkDeviceSize size;
 };
@@ -238,7 +241,7 @@ class BINDABLE : public BASE_NODE {
     // TODO : Need to update solution to track all sparse binding data
     std::unordered_set<MEM_BINDING> sparse_bindings;
 
-    small_unordered_set<VkDeviceMemory, 1> bound_memory_set_;
+    small_unordered_set<DEVICE_MEMORY_STATE *, 1> bound_memory_set_;
 
     BINDABLE()
         : sparse(false),
@@ -254,17 +257,17 @@ class BINDABLE : public BASE_NODE {
     void UpdateBoundMemorySet() {
         bound_memory_set_.clear();
         if (!sparse) {
-            bound_memory_set_.insert(binding.mem);
+            if (binding.mem_state) bound_memory_set_.insert(binding.mem_state.get());
         } else {
             for (auto sb : sparse_bindings) {
-                bound_memory_set_.insert(sb.mem);
+                bound_memory_set_.insert(sb.mem_state.get());
             }
         }
     }
 
     // Return unordered set of memory objects that are bound
     // Instead of creating a set from scratch each query, return the cached one
-    const small_unordered_set<VkDeviceMemory, 1> &GetBoundMemory() const { return bound_memory_set_; }
+    const small_unordered_set<DEVICE_MEMORY_STATE *, 1> &GetBoundMemory() const { return bound_memory_set_; }
 };
 
 class BUFFER_STATE : public BINDABLE {
@@ -456,9 +459,8 @@ struct DEVICE_MEMORY_STATE : public BASE_NODE {
     std::unordered_set<VulkanTypedHandle> obj_bindings;  // objects bound to this memory
     // Convenience vectors of handles to speed up iterating over objects independently
     std::unordered_set<VkImage> bound_images;
-    // TODO: Convert the two sets to the correct types.
-    std::unordered_set<uint64_t> bound_buffers;
-    std::unordered_set<uint64_t> bound_acceleration_structures;
+    std::unordered_set<VkBuffer> bound_buffers;
+    std::unordered_set<VkAccelerationStructureNV> bound_acceleration_structures;
 
     MemRange mapped_range;
     void *shadow_copy_base;    // Base of layer's allocation for guard band, data, and alignment space
