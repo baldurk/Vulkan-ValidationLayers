@@ -139,9 +139,9 @@ bool IMAGE_STATE::IsCreateInfoDedicatedAllocationImageAliasingCompatible(const V
 
 bool IMAGE_STATE::IsCompatibleAliasing(IMAGE_STATE *other_image_state) {
     if (!(createInfo.flags & other_image_state->createInfo.flags & VK_IMAGE_CREATE_ALIAS_BIT)) return false;
-    if ((create_from_swapchain == VK_NULL_HANDLE) && (binding.mem == other_image_state->binding.mem) &&
-        (binding.mem != VK_NULL_HANDLE) && (binding.offset == other_image_state->binding.offset) &&
-        IsCreateInfoEqual(other_image_state->createInfo)) {
+    if ((create_from_swapchain == VK_NULL_HANDLE) && binding.mem_state && other_image_state->binding.mem_state &&
+        (binding.mem_state->mem == other_image_state->binding.mem_state->mem) && (binding.mem_state->mem != VK_NULL_HANDLE) &&
+        (binding.offset == other_image_state->binding.offset) && IsCreateInfoEqual(other_image_state->createInfo)) {
         return true;
     }
     if ((bind_swapchain == other_image_state->bind_swapchain) && (bind_swapchain != VK_NULL_HANDLE)) {
