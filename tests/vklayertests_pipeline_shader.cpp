@@ -6929,3 +6929,47 @@ TEST_F(VkLayerTest, PipelineStageConditionalRenderingWithWrongQueue) {
     vk::DestroyRenderPass(m_device->device(), rp, nullptr);
     vk::DestroyFramebuffer(m_device->device(), fb, nullptr);
 }
+
+TEST_F(VkLayerTest, ValidateDeviceFeatureShaderArrayDynamicIndexing) {
+    TEST_DESCRIPTION("Validate device features about shaderArrayDynamicIndexing");
+    VkPhysicalDeviceFeatures deviceFeatures = {};
+    deviceFeatures.shaderUniformBufferArrayDynamicIndexing = VK_TRUE;
+    deviceFeatures.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
+    deviceFeatures.shaderStorageBufferArrayDynamicIndexing = VK_TRUE;
+    deviceFeatures.shaderStorageImageArrayDynamicIndexing = VK_TRUE;
+    ASSERT_NO_FATAL_FAILURE(Init(&deviceFeatures));
+    ASSERT_NO_FATAL_FAILURE(InitRenderTarget());
+
+    char const *fsSource =
+        "#version 450\n"
+        "layout(set=0, binding=0) uniform foo { int x; int y; } bar[10];\n"
+        "layout(set=0, binding=3) uniform sampler2D s[10];\n"
+        "layout(set=0, binding=5) buffer foo2 { int x; int y; } bar2[10];\n"
+        "layout(location = 0) out vec4 uFragColor;\n"
+        "void main(){\n"
+        "   int index = 0;\n"
+        "   bar[index].x = 10;\n"
+        "   bar2[index].x = 10;\n"
+        "   uFragColor = texture(s[index], vec2(0));\n"
+        "}\n";
+    VkShaderObj fs(m_device, fsSource, VK_SHADER_STAGE_FRAGMENT_BIT, this);
+
+    auto set_info = [&](CreatePipelineHelper &helper) { 
+        helper.dsl_bindings_ = {
+            // shaderUniformBufferArrayDynamicIndexing, UniformBufferArrayDynamicIndexing
+            {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10, VK_SHADER_STAGE_ALL, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 10, VK_SHADER_STAGE_ALL, nullptr},
+            // shaderSampledImageArrayDynamicIndexing, SampledImageArrayDynamicIndexing
+            {2, VK_DESCRIPTOR_TYPE_SAMPLER, 10, VK_SHADER_STAGE_ALL, nullptr},
+            {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 10, VK_SHADER_STAGE_ALL, nullptr},
+            {4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 10, VK_SHADER_STAGE_ALL, nullptr},
+            // shaderStorageBufferArrayDynamicIndexing, StorageBufferArrayDynamicIndexing
+            {5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10, VK_SHADER_STAGE_ALL, nullptr},
+            {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 10, VK_SHADER_STAGE_ALL, nullptr},
+            // shaderStorageImageArrayDynamicIndexing, StorageImageArrayDynamicIndexing
+            {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 10, VK_SHADER_STAGE_ALL, nullptr},
+        };
+        helper.shader_stages_ = {helper.vs_->GetStageCreateInfo(), fs.GetStageCreateInfo()};
+    };
+    CreatePipelineHelper::OneshotTest(*this, set_info, VK_DEBUG_REPORT_ERROR_BIT_EXT, "", true);
+}
